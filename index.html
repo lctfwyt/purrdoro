@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>🐱猫猫番茄钟🍅</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 85 85%22><text x=%2243%22 y=%2230%22 text-anchor=%22middle%22 dominant-baseline=%22central%22 font-size=%2280%22>🍅</text></svg>">
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#93c5fd">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="猫猫番茄钟">
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-8">
+  <div class="max-w-2xl mx-auto">
+    <div class="bg-white rounded-2xl shadow-2xl p-8">
+      <!-- 标题 -->
+      <div class="text-center mb-8">
+        <h1 class="text-3xl font-bold text-gray-800 mb-2">🐱猫猫番茄钟🍅</h1>
+        <p class="text-gray-600">温柔陪你度过每一天</p>
+      </div>
+
+      <!-- 启用提示（统一入口） -->
+      <div id="setup-prompt" class="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-xl p-5 mb-6">
+        <div class="text-center mb-4">
+          <p class="text-gray-700 font-medium mb-3">🔔 启用提醒功能</p>
+          <button id="enable-audio-btn" class="bg-blue-500 hover:bg-blue-600 text-white font-semibold py-2.5 px-6 rounded-lg transition-colors duration-200 shadow-md hover:shadow-lg">
+            开启声音 + 通知
+          </button>
+        </div>
+        <div class="text-xs text-gray-500 space-y-1.5 border-t border-blue-100 pt-3">
+          <p class="flex items-center justify-center gap-1">
+            <span>💡</span>
+            <span>下载为桌面应用或添加到手机主屏幕，提醒更可靠</span>
+            <button id="install-btn-inline" class="hidden text-blue-500 hover:text-blue-600 underline ml-1">立即安装</button>
+          </p>
+        </div>
+      </div>
+
+      <!-- 当前状态显示 -->
+      <div id="status-display" class="rounded-xl p-6 text-white mb-6">
+        <div class="flex items-center justify-center mb-4">
+          <svg id="status-icon" class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"></svg>
+        </div>
+        <h2 id="status-message" class="text-2xl font-bold text-center mb-2"></h2>
+        <div id="timer-display" class="text-center"></div>
+      </div>
+
+      <!-- 每日进度 -->
+      <div class="mb-6">
+        <div class="flex justify-between items-center mb-3">
+          <h3 class="text-lg font-semibold text-gray-700">今日进度</h3>
+          <span id="progress-text" class="text-sm text-gray-600"></span>
+        </div>
+        <div class="flex gap-4 w-full">
+          <div class="flex gap-1 flex-[4]" id="morning-progress"></div>
+          <div class="flex gap-1 flex-[4]" id="afternoon-progress"></div>
+          <div class="flex gap-1 flex-[2]" id="evening-progress"></div>
+        </div>
+      </div>
+
+      <!-- 时间表 -->
+      <div class="space-y-3" id="schedule-container">
+        <h3 class="text-lg font-semibold text-gray-700 mb-3">每日时间表</h3>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ==================== 配置 ====================
+    const CONFIG = {
+      WORK_MINUTES: 25,
+      REST_MINUTES: 5,
+      PREP_MINUTES: 10
+    };
+
+    const SESSIONS = [
+      { name: '上午番茄组', start: '10:00', end: '12:00', pomodoros: 4 },
+      { name: '下午番茄组', start: '13:30', end: '15:30', pomodoros: 4 },
+      { name: '傍晚番茄组', start: '15:50', end: '16:50', pomodoros: 2 }
+    ];
+
+    // ==================== 状态 ====================
+    const state = {
+      audioContext: null,
+      audioEnabled: false,
+      notificationEnabled: false,
+      wakeLock: null,
+      lastAlertKey: ''
+    };
+
+    // ==================== 音频系统 ====================
+    function initAudioContext() {
+      if (!state.audioContext) {
+        state.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      return state.audioContext;
+    }
+
+    async function ensureAudioContextActive() {
+      if (!state.audioContext) initAudioContext();
+      if (state.audioContext.state === 'suspended') {
+        await state.audioContext.resume().catch(() => {});
+      }
+    }
+
+    // 后备提示音
+    function playFallbackBeep() {
+      new Audio('data:audio/wav;base64,UklGRigAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQQAAAAAAA==').play().catch(() => {});
+    }
+
+    function scheduleBeep(frequency, duration, startTime) {
+      if (!state.audioContext) return;
+
+      const oscillator = state.audioContext.createOscillator();
+      const gainNode = state.audioContext.createGain();
+
+      oscillator.connect(gainNode);
+      gainNode.connect(state.audioContext.destination);
+      oscillator.frequency.value = frequency;
+      oscillator.type = 'sine';
+
+      const stopTime = startTime + (duration / 1000);
+      gainNode.gain.setValueAtTime(0, startTime);
+      gainNode.gain.linearRampToValueAtTime(0.3, startTime + 0.01);
+      gainNode.gain.exponentialRampToValueAtTime(0.01, stopTime);
+
+      oscillator.start(startTime);
+      oscillator.stop(stopTime);
+    }
+
+    async function playBeepSequence(beeps) {
+      await ensureAudioContextActive();
+
+      // 如果页面在后台，尝试播放后备提示音
+      if (document.visibilityState !== 'visible') {
+        playFallbackBeep();
+      }
+
+      // Web Audio API 可能无法在后台工作，但仍尝试播放
+      try {
+        const now = state.audioContext.currentTime;
+        let currentTime = now + 0.1;
+
+        for (const beep of beeps) {
+          const { frequency = 800, duration = 200, count = 1, interval = 350 } = beep;
+          for (let i = 0; i < count; i++) {
+            scheduleBeep(frequency, duration, currentTime);
+            currentTime += (duration + interval) / 1000;
+          }
+        }
+      } catch (e) {
+        console.error('音频播放失败:', e);
+      }
+    }
+
+    // ==================== 通知系统 ====================
+    async function requestNotificationPermission() {
+      if (!('Notification' in window)) return false;
+      if (Notification.permission === 'granted') return state.notificationEnabled = true;
+      if (Notification.permission === 'denied') return false;
+      const p = await Notification.requestPermission();
+      return state.notificationEnabled = p === 'granted';
+    }
+
+    async function showNotification(title, body, tag, requireInteraction = true) {
+      if (!state.notificationEnabled) return;
+      const icon = 'data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%2270%22 font-size=%2280%22>🍅</text></svg>';
+
+      if (navigator.serviceWorker?.controller) {
+        navigator.serviceWorker.controller.postMessage({ type: 'SHOW_NOTIFICATION', title, body, tag, requireInteraction });
+      } else {
+        const n = new Notification(title, { body, icon, tag, requireInteraction });
+        setTimeout(() => n.close(), requireInteraction ? 30000 : 5000);
+      }
+    }
+
+    // Wake Lock
+    async function requestWakeLock() {
+      if (!('wakeLock' in navigator) || document.visibilityState !== 'visible') return false;
+      try {
+        state.wakeLock = await navigator.wakeLock.request('screen');
+        return true;
+      } catch (e) {
+        return false;
+      }
+    }
+
+    document.addEventListener('visibilitychange', async () => {
+      if (document.visibilityState === 'visible' && state.audioEnabled) {
+        await ensureAudioContextActive();
+        if (state.wakeLock?.released) await requestWakeLock();
+      }
+    });
+
+    // 后台保持活跃的心跳机制
+    let heartbeatId = null;
+    function startHeartbeat() {
+      if (heartbeatId) clearInterval(heartbeatId);
+      heartbeatId = setInterval(() => {
+        // 页面在后台时，只能播放静音保持音频通道，不能请求 Wake Lock
+        if (document.visibilityState !== 'visible') {
+          playFallbackBeep();
+        }
+        // Wake Lock 只能在页面可见时请求
+      }, 30000); // 每30秒一次
+    }
+
+    // 初始化
+    async function enableAudio() {
+      initAudioContext();
+      await ensureAudioContextActive();
+      state.audioEnabled = true;
+      await requestNotificationPermission();
+      await requestWakeLock();
+      document.getElementById('setup-prompt')?.remove();
+      startHeartbeat();
+      await playBeepSequence([{ frequency: 523, duration: 200, count: 2, interval: 200 }]);
+      showNotification('🍅 番茄钟已启动', '声音和通知已启用', 'welcome', false);
+    }
+
+    // 工具函数
+    const parseTime = (timeStr) => {
+      const [h, m] = timeStr.split(':').map(Number);
+      const d = new Date();
+      d.setHours(h, m, 0, 0);
+      return d;
+    };
+    const formatTime = (m, s) => `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+
+    // 进度条渲染
+    const renderSegmentBar = (segs, elapsed, opts) => segs.map(s => {
+      const dur = s.end - s.start;
+      const prog = Math.max(0, Math.min(dur, elapsed - s.start));
+      const pct = (prog / dur) * 100;
+      const done = elapsed >= s.end;
+      const active = elapsed >= s.start && elapsed < s.end;
+      const w = opts.equalWidth ? 'flex-1' : '';
+      const ws = opts.equalWidth ? '' : `style="width:${(dur / opts.totalSeconds) * 100}%"`;
+      return `<div class="h-6 rounded-md overflow-hidden border-2 ${opts.borderColor} ${w}" ${ws}><div class="h-full transition-all duration-300" style="width:${done ? 100 : pct}%;background:${done || active ? opts.fillColor : 'transparent'}"></div></div>`;
+    }).join('');
+
+    // ==================== 状态计算 ====================
+    function getCurrentStatus() {
+      const now = new Date();
+
+      for (const session of SESSIONS) {
+        const sessionStart = parseTime(session.start);
+        const sessionEnd = parseTime(session.end);
+        const prepTime = new Date(sessionStart.getTime() - CONFIG.PREP_MINUTES * 60 * 1000);
+
+        // 准备时间
+        if (now >= prepTime && now < sessionStart) {
+          const minutesUntilStart = Math.ceil((sessionStart - now) / 60000);
+          return {
+            type: 'prep',
+            session: session.name,
+            message: `${session.name}将在${minutesUntilStart}分钟后开始`,
+            timeLeft: sessionStart - now
+          };
+        }
+
+        // 在时间段内
+        if (now >= sessionStart && now < sessionEnd) {
+          const totalDuration = (CONFIG.WORK_MINUTES + CONFIG.REST_MINUTES) * 60 * 1000;
+          const elapsed = now - sessionStart;
+          const currentPomodoroIndex = Math.floor(elapsed / totalDuration);
+
+          if (currentPomodoroIndex >= session.pomodoros) continue;
+
+          const pomodoroStart = new Date(sessionStart.getTime() + currentPomodoroIndex * totalDuration);
+          const timeInPomodoro = now - pomodoroStart;
+          const pomodoroNumber = currentPomodoroIndex + 1;
+
+          // 工作时间
+          if (timeInPomodoro < CONFIG.WORK_MINUTES * 60 * 1000) {
+            const secondsInWork = Math.floor(timeInPomodoro / 1000);
+            return {
+              type: 'work',
+              session: session.name,
+              pomodoroNumber,
+              totalPomodoros: session.pomodoros,
+              minutesLeft: CONFIG.WORK_MINUTES - 1 - Math.floor(secondsInWork / 60),
+              secondsLeft: 59 - (secondsInWork % 60),
+              secondsInWork,
+              message: `${session.name.replace('番茄组', '')}第${pomodoroNumber}个番茄钟 - 工作中`
+            };
+          }
+
+          // 休息时间（最后一个番茄后无休息）
+          if (currentPomodoroIndex >= session.pomodoros - 1) continue;
+
+          const secondsInRest = Math.floor((timeInPomodoro - CONFIG.WORK_MINUTES * 60 * 1000) / 1000);
+          const totalRestSeconds = CONFIG.REST_MINUTES * 60;
+          const secondsLeft = totalRestSeconds - secondsInRest;
+
+          return {
+            type: 'rest',
+            session: session.name,
+            pomodoroNumber,
+            totalPomodoros: session.pomodoros,
+            minutesLeft: Math.floor(secondsLeft / 60),
+            secondsLeft: secondsLeft % 60,
+            secondsInRest,
+            restMinute: Math.floor(secondsInRest / 60),
+            message: `休息时间 - ${session.name.replace('番茄组', '')}第${pomodoroNumber}个番茄钟后`
+          };
+        }
+      }
+
+      return { type: 'idle', message: '当前不在工作时间段内' };
+    }
+
+    function getExpectedCompletedPomodoros() {
+      const now = new Date();
+      const completed = [];
+      let pomodoroIndex = 0;
+      let currentPomodoro = -1;
+
+      for (const session of SESSIONS) {
+        const sessionStart = parseTime(session.start);
+        const sessionEnd = parseTime(session.end);
+
+        if (now < sessionStart) break;
+
+        if (now >= sessionEnd) {
+          for (let i = 0; i < session.pomodoros; i++) {
+            completed.push(pomodoroIndex + i);
+          }
+          pomodoroIndex += session.pomodoros;
+        } else {
+          const totalDuration = (CONFIG.WORK_MINUTES + CONFIG.REST_MINUTES) * 60 * 1000;
+          const elapsed = now - sessionStart;
+          const currentPomodoroInSession = Math.floor(elapsed / totalDuration);
+
+          for (let i = 0; i < currentPomodoroInSession; i++) {
+            completed.push(pomodoroIndex + i);
+          }
+
+          const timeInPomodoro = elapsed - (currentPomodoroInSession * totalDuration);
+          if (timeInPomodoro >= CONFIG.WORK_MINUTES * 60 * 1000 && currentPomodoroInSession < session.pomodoros) {
+            completed.push(pomodoroIndex + currentPomodoroInSession);
+          } else if (currentPomodoroInSession < session.pomodoros) {
+            currentPomodoro = pomodoroIndex + currentPomodoroInSession;
+          }
+
+          break;
+        }
+      }
+
+      return { completed, currentPomodoro };
+    }
+
+    // ==================== 提醒系统 ====================
+    async function triggerAlerts(status) {
+      if (!state.audioEnabled) return;
+
+      let alertKey = '';
+      let beeps = null;
+      let notificationTitle = '';
+      let notificationBody = '';
+
+      if (status.type === 'work') {
+        const sec = status.secondsInWork;
+        alertKey = `work-${status.pomodoroNumber}-${sec}`;
+
+        const workAlerts = {
+          0: { beeps: [{ frequency: 262, duration: 600, count: 8, interval: 150 }], title: '🍅 开始工作', body: `${status.session.replace('番茄组', '')}第${status.pomodoroNumber}个番茄钟开始了！` },
+          120: { beeps: [{ frequency: 196, duration: 1200, count: 1 }], title: '⏰ 2分钟提醒', body: '已工作2分钟' },
+          750: { beeps: [{ frequency: 196, duration: 1200, count: 2, interval: 200 }], title: '⏰ 12.5分钟提醒', body: '当前番茄钟已进行到一半' },
+          1380: { beeps: [{ frequency: 196, duration: 1200, count: 3, interval: 200 }], title: '⏰ 23分钟提醒', body: '还有2分钟结束工作' },
+          1499: { beeps: [{ frequency: 196, duration: 600, count: 8, interval: 150 }], title: '✅ 工作结束', body: `${status.session.replace('番茄组', '')}第${status.pomodoroNumber}个番茄钟完成！` }
+        };
+
+        if (workAlerts[sec]) {
+          beeps = workAlerts[sec].beeps;
+          notificationTitle = workAlerts[sec].title;
+          notificationBody = workAlerts[sec].body;
+        }
+      } else if (status.type === 'rest') {
+        const minute = status.restMinute;
+        if (minute >= 1 && minute <= 4) {
+          alertKey = `rest-${status.pomodoroNumber}-${minute}`;
+          beeps = [{ frequency: 262, duration: 1200, count: minute, interval: 200 }];
+          notificationTitle = `☕ 休息${minute}分钟`;
+          notificationBody = `休息时间已过${minute}分钟`;
+        }
+      } else if (status.type === 'prep') {
+        const minutesLeft = Math.ceil(status.timeLeft / 60000);
+        if (minutesLeft === 10) {
+          alertKey = 'prep-10';
+          beeps = [
+            { frequency: 262, duration: 500, count: 1 },
+            { frequency: 330, duration: 500, count: 1 },
+            { frequency: 294, duration: 500, count: 1 },
+            { frequency: 196, duration: 1500, count: 1 }
+          ];
+          notificationTitle = '⏰ 准备开始';
+          notificationBody = `${status.session}将在10分钟后开始`;
+        }
+      }
+
+      if (alertKey && alertKey !== state.lastAlertKey) {
+        state.lastAlertKey = alertKey;
+        if (beeps) {
+          await playBeepSequence(beeps);
+          // 重要提醒（开始、结束）保持显示直到用户交互
+          const isImportant = alertKey.includes('work-0') || alertKey.includes('work-1499') || alertKey.includes('prep-10');
+          if (notificationTitle && document.visibilityState !== 'visible') {
+            showNotification(notificationTitle, notificationBody, alertKey, isImportant);
+          }
+        }
+      }
+    }
+
+    // ==================== UI 渲染 ====================
+    function renderSchedule() {
+      const c = document.getElementById('schedule-container');
+      SESSIONS.forEach(s => {
+        const d = document.createElement('div');
+        d.className = 'bg-gray-50 rounded-lg p-4';
+        d.innerHTML = `<div class="flex justify-between items-center"><div><div class="font-semibold text-gray-800">${s.name}</div><div class="text-sm text-gray-600">${s.start} - ${s.end}</div></div><div class="text-sm text-gray-600">${s.pomodoros} 个番茄钟</div></div>`;
+        c.appendChild(d);
+      });
+    }
+
+    function renderProgress(elId, start, count, completed, current) {
+      const c = document.getElementById(elId);
+      c.innerHTML = '';
+      for (let i = 0; i < count; i++) {
+        const idx = start + i;
+        const d = document.createElement('div');
+        d.className = 'flex-1 h-6 rounded-lg ' + (completed.includes(idx) ? 'bg-blue-200' : current === idx ? 'bg-blue-50 border-2 border-blue-200' : 'bg-blue-50');
+        c.appendChild(d);
+      }
+    }
+
+    const updateTimerDisplay = (s) => {
+      const el = document.getElementById('timer-display');
+      if (s.type === 'work') {
+        const segs = [{start:0,end:120},{start:120,end:750},{start:750,end:1380},{start:1380,end:1500}];
+        el.innerHTML = `<div class="text-6xl font-mono font-bold mb-2">${formatTime(s.minutesLeft,s.secondsLeft)}</div><div class="text-sm opacity-90 mb-4">工作时间</div><div class="flex gap-1 w-full">${renderSegmentBar(segs,s.secondsInWork,{totalSeconds:1500,borderColor:'border-blue-200',fillColor:'#bfdbfe'})}</div>`;
+      } else if (s.type === 'rest') {
+        const segs = [{start:0,end:60},{start:60,end:120},{start:120,end:180},{start:180,end:240},{start:240,end:300}];
+        el.innerHTML = `<div class="text-6xl font-mono font-bold mb-2">${formatTime(s.minutesLeft,s.secondsLeft)}</div><div class="text-sm opacity-90 mb-4">休息时间</div><div class="flex gap-1 w-full">${renderSegmentBar(segs,s.secondsInRest,{borderColor:'border-sky-100',fillColor:'#e0f2fe',equalWidth:true})}</div>`;
+      } else if (s.type === 'idle') {
+        el.innerHTML = `<div class="text-lg opacity-90">当前时间：${new Date().toLocaleTimeString('zh-CN')}</div>`;
+      } else {
+        el.innerHTML = '';
+      }
+    };
+
+    function updateStatusDisplay(status) {
+      const statusDisplay = document.getElementById('status-display');
+      const statusIcon = document.getElementById('status-icon');
+      const statusMessage = document.getElementById('status-message');
+
+      const styles = {
+        work: 'bg-gradient-to-r from-blue-300 to-blue-400',
+        rest: 'bg-gradient-to-r from-sky-200 to-blue-200',
+        idle: 'bg-gradient-to-r from-slate-300 to-slate-400',
+        prep: 'bg-gradient-to-r from-slate-300 to-slate-400'
+      };
+      const iconPath = 'stroke-linecap="round" stroke-linejoin="round" stroke-width="2"';
+      const icons = {
+        work: `<path ${iconPath} d="M21 13.255A23.931 23.931 0 0112 15c-3.183 0-6.22-.62-9-1.745M16 6V4a2 2 0 00-2-2h-4a2 2 0 00-2 2v2m4 6h.01M5 20h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>`,
+        rest: `<path ${iconPath} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/>`,
+        idle: `<path ${iconPath} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>`,
+        prep: `<path ${iconPath} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>`
+      };
+
+      statusDisplay.className = `rounded-xl p-6 text-white mb-6 ${styles[status.type] || styles.idle}`;
+      statusIcon.innerHTML = icons[status.type] || icons.idle;
+      statusMessage.textContent = status.message;
+    }
+
+    function updateUI() {
+      const s = getCurrentStatus();
+      const { completed, currentPomodoro: cur } = getExpectedCompletedPomodoros();
+      updateStatusDisplay(s);
+      updateTimerDisplay(s);
+      document.getElementById('progress-text').textContent = `${completed.length} / 10 个番茄钟`;
+      renderProgress('morning-progress', 0, 4, completed, cur);
+      renderProgress('afternoon-progress', 4, 4, completed, cur);
+      renderProgress('evening-progress', 8, 2, completed, cur);
+      triggerAlerts(s);
+    }
+
+    // Web Worker 计时器
+    const workerCode = `
+      let last = Date.now(), id;
+      function tick() {
+        const now = Date.now();
+        const drift = now - last - 1000;
+        last = now;
+        self.postMessage({type:'TICK'});
+        id = setTimeout(tick, Math.max(50, 1000 - drift));
+      }
+      self.onmessage = e => { if(e.data==='START'){ last=Date.now(); if(id)clearTimeout(id); tick(); } };
+    `;
+    const worker = new Worker(URL.createObjectURL(new Blob([workerCode])));
+    worker.onmessage = e => { if(e.data.type==='TICK') updateUI(); };
+
+    // PWA 功能
+    let deferredPrompt;
+    const installBtn = document.getElementById('install-btn-inline');
+
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('service-worker.js').catch(() => {});
+    }
+
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      deferredPrompt = e;
+      installBtn?.classList.remove('hidden');
+    });
+
+    installBtn?.addEventListener('click', async () => {
+      if (!deferredPrompt) return;
+      deferredPrompt.prompt();
+      const { outcome } = await deferredPrompt.userChoice;
+      if (outcome === 'accepted') installBtn.classList.add('hidden');
+      deferredPrompt = null;
+    });
+
+    window.addEventListener('appinstalled', () => {
+      deferredPrompt = null;
+      installBtn?.classList.add('hidden');
+    });
+
+    // 启动
+    document.getElementById('enable-audio-btn').addEventListener('click', async () => {
+      await enableAudio();
+      worker.postMessage('START');
+    });
+    renderSchedule();
+    updateUI();
+  </script>
+</body>
+</html>
